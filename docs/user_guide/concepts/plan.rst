@@ -89,7 +89,7 @@ Biological model
 ----------------
 
 ``pln.bio_model`` selects the model that turns physical dose into RBE-weighted dose (see
-:ref:`concept_dose_calculation` for what the dose engines compute from it). It accepts a model
+:ref:`concept_dose_calculation`). It accepts a model
 name, a ``{"model": name, **parameters}`` dict, or a model instance from
 :mod:`pyRadPlan.biology.models`; the plan validates it against the radiation mode and stores the
 model instance:
@@ -120,10 +120,11 @@ matrix entries. Voxels outside every structure carry no reference parameters
 
 An evaluator separately declares its additive matrix outputs through
 ``influence_quantity_names`` and produces them with ``evaluate_influence()``. For LQ models these
-are ``alpha_dose`` and ``sqrt_beta_dose``. The evaluator boundary can describe different
-sufficient statistics, but the current fixed ``Dij`` schema cannot store additional names; the
-dose engine reports those during setup. A future generic quantity registry is outlined in
-``docs/development/dynamic_dij_quantities.md``. See :ref:`custom_biological_models` for the
+are ``alpha_dose`` and ``sqrt_beta_dose``. A custom evaluator may declare other names, but
+``Dij`` currently has a fixed set of matrix fields, so only names that already exist there can be
+stored. The dose engine rejects any other name when it sets up the calculation. A generic
+registry for new matrix quantities is planned (see
+``docs/development/dynamic_dij_quantities.md``). See :ref:`custom_biological_models` for the
 complete extension contract and a registered external model example.
 
 .. list-table::
@@ -147,7 +148,7 @@ complete extension contract and a registered external model example.
      - Linear scaling of α with LET between two thresholds.
    * - ``"HEL"``
      - helium
-     - Mairani helium model.
+     - A Data driven RBE parametrization based on the LET.
    * - ``"alpha_beta_kernels"`` (``"kernel_based_lq"``, ``"LEM"``)
      - protons, helium, carbon, oxygen
      - α/β depth kernels per tissue class from the machine data, of whatever provenance

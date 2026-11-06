@@ -28,15 +28,54 @@ Generating the steering information
 
     stf = generate_stf(ct, cst, pln)
 
-The generator can be selected explicitly via ``prop_stf["generator"]``. Available generators
-include:
+Available generators
+--------------------
 
-- **IMPT** — Intensity-modulated particle therapy (ions). Produces energy-layer spot maps that
-  cover the target.
-- **ionSingleSpot** — A single particle spot, useful for focused tests and debugging.
-- **photonIMRT**, **photonOpenFields**, **photonSingleBixel** — Photon steering generators for
-  IMRT-like, open-field, and single-bixel setups.
-- **VHEE** — Very-high-energy electron steering.
+The generator is selected via ``prop_stf["generator"]`` using its short name. If omitted, a
+default suitable for the plan's radiation mode is chosen. The generators compatible with a
+given plan can be listed with :func:`~pyRadPlan.stf.generators.get_available_generators`.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 15 65
+
+   * - Short name
+     - Radiation modes
+     - Description
+   * - ``IMPT``
+     - protons, helium, carbon, oxygen
+     - :class:`~pyRadPlan.stf.generators.StfGeneratorIMPT` — Intensity-modulated particle
+       therapy. Places a lateral spot grid (``bixel_width`` / ``lateral_spot_spacing``) over the
+       target projection and selects, per ray, all energy layers whose Bragg peaks fall inside
+       the target. Energy layers are thinned to ``longitudinal_spot_spacing`` (default 2 mm).
+   * - ``ionSingleSpot``
+     - protons, helium, carbon, oxygen
+     - :class:`~pyRadPlan.stf.generators.StfGeneratorIonSingleSpot` — A single ray through the
+       isocenter with one spot at a fixed energy (``fix_energy``; the closest machine energy is
+       used). Useful for pencil-beam studies, tests, and debugging.
+   * - ``photonIMRT``
+     - photons
+     - :class:`~pyRadPlan.stf.generators.StfGeneratorPhotonIMRT` — Ray-bixel geometry for
+       photon IMRT. Covers the target projection with a grid of bixels of size ``bixel_width``,
+       each at a single nominal energy (default 6 MV).
+   * - ``photonOpenFields``
+     - photons
+     - :class:`~pyRadPlan.stf.generators.StfGeneratorPhotonCollimatedSquareFields` — One central
+       ray per beam representing a collimated square open field of width ``field_width``.
+   * - ``photonSingleBixel``
+     - photons
+     - :class:`~pyRadPlan.stf.generators.StfGeneratorPhotonSingleBixel` — A single bixel through
+       the isocenter per beam. Optionally supports field-based dose calculation with a custom
+       field shape and beam-limiting devices.
+   * - ``VHEE``
+     - VHEE
+     - :class:`~pyRadPlan.stf.generators.StfGeneratorVHEE` — Very-high-energy electrons. Uses a
+       ray-bixel grid over the target like IMRT, but with a single fixed energy per beam (default
+       200 MeV).
+
+Custom generators can be added by subclassing
+:class:`~pyRadPlan.stf.generators.StfGeneratorBase` and registering them with
+:func:`~pyRadPlan.stf.generators.register_generator`.
 
 Object hierarchy
 -----------------

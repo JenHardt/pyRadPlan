@@ -10,19 +10,26 @@ product ``dij · w``.
 
 Two top-level functions are provided:
 
-- :func:`~pyRadPlan.calc_dose_influence` — compute the full dose influence matrix (batch mode).
-- :func:`~pyRadPlan.calc_dose_forward` — compute only the forward dose for a given fluence
-  vector (faster, used for dose reconstruction after optimization).
+- :func:`~pyRadPlan.calc_dose_influence` — compute the full dose influence matrix, storing the
+  dose of every beamlet as a separate column.
+- :func:`~pyRadPlan.calc_dose_forward` — compute the dose of one given fluence vector directly,
+  accumulating the weighted beamlet doses instead of storing them.
+
+The forward calculation saves memory, since no influence matrix is stored. It is useful for recalculating a plan, e.g.
+with a different engine or dose grid, or when the influence matrix would not fit into memory.
+To evaluate the dose of an optimized fluence with an existing ``dij``, use
+``dij.compute_result_ct_grid(fluence)`` instead (see below).
 
 .. code-block:: python
 
     from pyRadPlan import calc_dose_influence, calc_dose_forward
 
-    # Full influence matrix (used before optimization)
+    # Full influence matrix (used for optimization)
     dij = calc_dose_influence(ct, cst, stf, pln)
 
-    # Forward dose after optimization
-    dij_fwd = calc_dose_forward(ct, cst, stf, pln, weights=fluence)
+    # Direct dose of a given fluence; returns result images on the CT grid
+    result = calc_dose_forward(ct, cst, stf, pln, weights=fluence)
+    physical_dose_ct = result["physical_dose"]
 
 Both functions select the appropriate engine automatically from ``pln.prop_dose_calc["engine"]``.
 
@@ -47,13 +54,14 @@ Additional matrices are available for biological dose calculation in particle th
    * - Attribute
      - Description
    * - ``physical_dose``
-     - Physical dose contribution per voxel per beamlet (Gy / primary particle).
+     - Physical dose contribution per voxel per beamlet (Gy / unit fluence).
    * - ``let_dose``
-     - LET-weighted dose matrix for LET-based optimization.
+     - LET-weighted dose matrix for LET-based optimization (keV/µm · Gy / unit fluence).
    * - ``alpha_dose``
-     - Per-beamlet α-dose for the linear-quadratic (LQ) biological model.
+     - Per-beamlet α-dose for the linear-quadratic (LQ) biological model (α in Gy⁻¹ times
+       dose, i.e. 1 / unit fluence).
    * - ``sqrt_beta_dose``
-     - Per-beamlet √β-dose for the LQ model.
+     - Per-beamlet √β-dose for the LQ model (√β in Gy⁻¹ times dose, i.e. 1 / unit fluence).
 
 The set of available matrices determines which :ref:`quantities <concept_quantities>` can be
 resolved during optimization. Every engine, photon engines included, stores the biological model it used as
@@ -72,10 +80,11 @@ Which of the additional matrices a particle engine computes follows from ``pln.b
 * Supported biological influence matrices are computed when the evaluator declares them. The
   current ``Dij`` schema supports the ``alpha_dose`` / ``sqrt_beta_dose`` declared by the in-tree
   LQ evaluators.
-* ``let_dose`` is computed when the machine provides LET kernels (pencil beam) or the model
-  requires LET (FRED, which scores LET only on request). Because FRED scores LET itself, an
-  LET-based model can be used with a machine that carries no LET kernels; the pencil-beam
-  engines interpolate the machine's LET kernels and therefore need them.
+* ``let_dose`` is computed when the machine provides LET kernels (pencil beam) or the biological
+  model requires LET. How the LET is obtained depends on the engine: pencil-beam engines
+  interpolate it from the machine's LET kernels and therefore need them, while Monte Carlo
+  engines such as FRED can score the LET themselves during the simulation. An LET-based model can
+  therefore be used with FRED even if the machine carries no LET kernels.
 
 Both can be overridden through the engine parameters ``calc_bio_dose`` and ``calc_let``,
 which accept ``"auto"`` (default), ``True`` or ``False``:
@@ -169,18 +178,73 @@ one line:
    * - Engine key
      - Description
    * - ``"SVDPB"``
-     - SVD-accelerated pencil beam (photons). Improved lateral scatter modelling.
+     - SVD pencil beam for photons.
    * - ``"HongPB"``
-     - Hong's particle pencil-beam model. Reference implementation for protons/ions.
-   * - ``"FRED"``
-     - `FRED <https://www.fred-mc.org>`_ Monte Carlo engine (requires FRED installation).
-       Validated for protons only; ion calculations warn that their doses do not yet
-       reproduce the reference.
+     - Hong's analytical pencil beam for protons and ions.
+   * - ``"FRED"``, ``"TOPAS"``
+     - Monte Carlo engines interfacing external codes (installation required):
+
+       - ``"FRED"`` — `FRED <https://www.fred-mc.org>`_. Validated for protons only; ion
+         calculations warn that their doses do not yet reproduce the reference.
+       - ``"TOPAS"`` — `TOPAS <https://opentopas.readthedocs.io>`_ for photons, VHEE, protons and
+         ions.
 
 .. code-block:: python
 
     pln.prop_dose_calc = {"engine": "HongPB"}
     dij = calc_dose_influence(ct, cst, stf, pln)
+
+Pencil-beam engines are fast and deterministic and are the usual choice for computing the
+influence matrix for optimization. Monte Carlo engines model particle transport in
+heterogeneous tissue more accurately at a higher computational cost. All engine parameters are listed in the API reference of
+the respective engine class.
+
+SVD pencil beam
+~~~~~~~~~~~~~~~
+
+:class:`~pyRadPlan.dose.engines.PhotonPencilBeamSVDEngine` follows the singular value
+decomposition method of Bortfeld, Schlegel & Rhein (1993). The depth-dependent photon
+pencil-beam kernel is decomposed into a few depth-independent lateral kernels with
+depth-dependent weights. The radiological depth of each voxel is obtained by ray tracing
+through the CT, the bixel fluence is convolved with the lateral kernels in the beam's eye
+view, and the result is evaluated at the voxel positions and depths. Low-dose entries far
+from a beamlet can be thinned by random sampling (*dij sampling*) to keep the matrix sparse.
+
+Hong pencil beam
+~~~~~~~~~~~~~~~~
+
+:class:`~pyRadPlan.dose.engines.ParticleHongPencilBeamEngine` implements the particle
+pencil-beam algorithm of Hong et al. (1996). Each spot is modelled as a tabulated integral
+depth dose, interpolated at the water-equivalent depth of the voxel, multiplied by a lateral
+Gaussian whose width grows with depth through multiple Coulomb scattering and is broadened by
+the initial spot size. LET and biological kernels of the machine are
+interpolated the same way. Heterogeneities are only taken into account along the central ray
+of each spot.
+
+Monte Carlo engines
+~~~~~~~~~~~~~~~~~~~
+
+The Monte Carlo engines transport individual particles through the voxelized patient and
+therefore model lateral scattering in heterogeneous tissue and nuclear interactions
+explicitly. pyRadPlan does not simulate the particles itself but interfaces external codes,
+which must be installed separately: it writes the CT with a HU-to-material conversion and the
+plan's fields, energy layers and spots as input for the code, and reads the scored dose back
+into a ``Dij``. Both engines compute a single (nominal) scenario and score the dose-averaged
+LET themselves, so LET-based biological models work without LET kernels in the machine.
+
+- **FRED** — :class:`~pyRadPlan.dose.engines.ParticleFredMCEngine` interfaces the
+  GPU-accelerated Monte Carlo code FRED (Schiavi et al. 2017), which pyRadPlan runs directly.
+  For an influence matrix FRED simulates ``num_histories_per_beamlet`` primaries per spot; a
+  forward calculation simulates ``num_histories_direct`` primaries for the whole plan.
+- **TOPAS** — :class:`~pyRadPlan.dose.engines.ParticleTOPASMCEngine` interfaces TOPAS, a
+  Geant4-based Monte Carlo toolkit (Perl et al. 2012; Faddegon et al. 2020). As the TOPAS monte carlo
+  code is not optimized for speed, it is meant for forward calculation of a given plan. Therefore the calculation
+  runs in two steps: with ``external_calculation=True`` pyRadPlan writes the input to
+  ``simu_dir``, sampling ``num_histories_direct`` primaries from the spot weights and splitting
+  them into ``num_runs`` independent runs. After running TOPAS, setting
+  ``external_calculation`` to the output folder reads the scored dose, sums the runs per beam
+  and stores the run-to-run variance. The result holds one column per beam.
+   TOPAS has the option to score proton LET.
 
 Backend-agnostic computation
 -----------------------------
